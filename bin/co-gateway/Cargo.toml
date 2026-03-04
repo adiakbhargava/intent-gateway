@@ -1,0 +1,16 @@
+[package]
+name = "co-gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "co-gateway"
+path = "src/main.rs"
+
+[dependencies]
+co-grpc = { path = "../../crates/co-grpc" }
+co-core = { path = "../../crates/co-core" }
+tokio = { workspace = true }
+tonic = { workspace = true }
+clap = { workspace = true }

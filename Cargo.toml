@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/*", "bin/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Adi AK Bhargava"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+ort = "2.0.0-rc.11"
+ndarray = "0.16"
+clap = { version = "4.5", features = ["derive"] }
+core_affinity = "0.8"
+crossbeam = "0.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

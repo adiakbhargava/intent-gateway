@@ -1,0 +1,8 @@
+[package]
+name = "embedding"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+statistics = {path = "../statistics"}

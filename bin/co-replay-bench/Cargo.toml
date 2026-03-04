@@ -1,0 +1,17 @@
+[package]
+name = "co-replay-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "co-replay-bench"
+path = "src/main.rs"
+
+[dependencies]
+co-core = { path = "../../crates/co-core" }
+co-fusion = { path = "../../crates/co-fusion" }
+co-ingest = { path = "../../crates/co-ingest" }
+co-replay = { path = "../../crates/co-replay" }
+co-inference = { path = "../../crates/co-inference" }
+clap = { workspace = true }

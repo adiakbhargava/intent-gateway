@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Adi AK Bhargava"]
+
+[workspace.dependencies]
+criterion = {version = "0.5", features = ["html_reports"]}
+crossbeam = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+
+# Separate profile for flamegraph / perf profiling.
+# Usage: cargo build --profile profiling
+#        cargo flamegraph --profile profiling -p pipeline -- --packets 50000
+[profile.profiling]
+inherits = "release"
+debug = true
+

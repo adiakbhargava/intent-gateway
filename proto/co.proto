@@ -1,0 +1,88 @@
+syntax = "proto3";
+package co_systems;
+
+// The core streaming service
+service IntentStream {
+  // Server-streaming: client subscribes, server pushes fused packets
+  rpc Subscribe (SubscribeRequest) returns (stream FusedPacket);
+
+  // Server-streaming: stream raw embeddings (feature vectors) for downstream models
+  rpc StreamEmbeddings (EmbeddingRequest) returns (stream EmbeddingPacket);
+
+  // Unary: request a latency audit report
+  rpc Audit (AuditRequest) returns (AuditReport);
+}
+
+// Subscribe configuration
+message SubscribeRequest {
+  uint32 channel_count = 1;        // EEG channels (default: 64)
+  double sample_rate_hz = 2;       // Hz (default: 256.0)
+  bool include_raw_eeg = 3;        // Include raw samples in stream
+  bool include_features = 4;       // Include extracted feature vector
+}
+
+// The fused multi-modal packet
+message FusedPacket {
+  uint64 timestamp_ns = 1;         // Nanosecond Unix timestamp
+  uint32 sequence_id = 2;          // Monotonic packet sequence number
+  repeated float eeg_channels = 3; // Raw EEG samples (packed)
+  float gaze_x = 4;               // Gaze X coordinate (degrees)
+  float gaze_y = 5;               // Gaze Y coordinate (degrees)
+  float pupil_diameter = 6;        // Pupil diameter (mm)
+  int64 alignment_offset_ns = 7;   // EEG-gaze timestamp alignment correction
+  repeated float features = 8;     // Extracted feature vector (if requested)
+  float confidence = 9;            // Model inference confidence [0.0, 1.0]
+  string classification = 10;      // "intent" or "observe"
+}
+
+// Embedding extraction configuration
+message EmbeddingRequest {
+  uint32 channel_count = 1;        // EEG channels (default: 64)
+  double sample_rate_hz = 2;       // Hz (default: 256.0)
+}
+
+// Raw feature vector for downstream models (foundation models, fine-tuning)
+message EmbeddingPacket {
+  uint64 timestamp_ns = 1;         // Nanosecond Unix timestamp
+  uint32 sequence_id = 2;          // Monotonic packet sequence number
+  repeated float eeg_features = 3; // 11-dim: 5 relative + 5 absolute band powers + RMS
+  float gaze_x = 4;                // Gaze X coordinate
+  float gaze_y = 5;                // Gaze Y coordinate
+  float pupil_diameter = 6;        // Pupil diameter (mm)
+  int64 alignment_offset_ns = 7;   // EEG-gaze temporal offset
+  repeated float raw_eeg = 8;      // Raw EEG channel values (if requested)
+}
+
+// Audit request
+message AuditRequest {
+  uint64 packet_count = 1;         // Number of packets to benchmark
+  double drop_rate = 2;            // Simulated drop rate
+  double corrupt_rate = 3;         // Simulated corruption rate
+  bool pin_cores = 4;              // Enable CPU affinity
+}
+
+// Audit report
+message AuditReport {
+  uint64 packets_sent = 1;
+  uint64 packets_received = 2;
+  uint64 packets_dropped = 3;
+  uint64 decode_errors = 4;
+  double duration_ms = 5;
+  double throughput_pps = 6;       // Packets per second
+
+  // Latency percentiles (nanoseconds)
+  uint64 p50_ns = 10;
+  uint64 p90_ns = 11;
+  uint64 p99_ns = 12;
+  uint64 p999_ns = 13;
+  uint64 min_ns = 14;
+  uint64 max_ns = 15;
+  uint64 mean_ns = 16;
+
+  // Jitter
+  double jitter_std_dev_ns = 20;
+  double mean_interval_ns = 21;
+
+  // Resource usage
+  uint64 heap_allocs = 30;
+}

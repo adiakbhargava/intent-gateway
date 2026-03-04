@@ -1,0 +1,8 @@
+[package]
+name = "co-ingest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+co-fusion = { path = "../co-fusion" }

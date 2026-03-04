@@ -1,0 +1,21 @@
+[package]
+name = "co-grpc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+tonic = { workspace = true }
+tonic-prost = "0.14"
+prost = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+co-core = { path = "../co-core" }
+co-fusion = { path = "../co-fusion" }
+co-inference = { path = "../co-inference" }
+co-ingest = { path = "../co-ingest" }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+tonic-build = "0.14"
+prost-build = "0.14"

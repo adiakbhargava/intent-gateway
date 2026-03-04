@@ -1,0 +1,9 @@
+[package]
+name = "co-replay"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+co-fusion = { path = "../co-fusion" }
+co-ingest = { path = "../co-ingest" }

@@ -1,0 +1,5 @@
+[package]
+name = "fault-inject"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true

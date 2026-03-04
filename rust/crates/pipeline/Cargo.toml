@@ -1,0 +1,14 @@
+[package]
+name = "pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+ring-buffer  = {path = "../ring-buffer"}
+allocator    = {path = "../allocator"}
+transcoder   = {path = "../transcoder"}
+statistics   = {path = "../statistics"}
+fault-inject = {path = "../fault-inject"}
+embedding    = {path = "../embedding"}
+core_affinity = "0.8"

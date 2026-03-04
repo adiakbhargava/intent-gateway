@@ -1,0 +1,9 @@
+[package]
+name = "co-inference"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+ort = { workspace = true }
+ndarray = { workspace = true }

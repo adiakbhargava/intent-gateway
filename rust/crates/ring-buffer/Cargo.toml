@@ -1,0 +1,14 @@
+[package]
+name = "ring-buffer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+crossbeam.workspace = true
+allocator = {path = "../allocator"}
+
+[[bench]]
+name = "throughput"
+harness = false
