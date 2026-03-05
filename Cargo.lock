@@ -262,6 +262,7 @@ dependencies = [
  "co-fusion",
  "co-inference",
  "co-ingest",
+ "co-replay",
  "prost",
  "prost-build",
  "tokio",

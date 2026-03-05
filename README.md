@@ -10,7 +10,7 @@ Gaze (x,y,pupil @ 60 Hz)┘   (nearest-neighbor)    (11-dim embedding)   (Conv1D
 
 Processes 65 subjects of real EEG+gaze data at **671K-1.8M frames/sec** (1,341x-14,025x real-time) on a single core with zero hot-path heap allocations.
 
-> **Companion repository:** [spn-gaze-intent-research](https://github.com/REPLACE/spn-gaze-intent-research) — offline Python pipeline validating the scientific thesis (SPN+gaze fusion for intent decoding).
+> **Companion repository:** [spn-gaze-intent-research](https://github.com/adiakbhargava/spn-gaze-intent-research) — offline Python pipeline validating the scientific thesis (SPN+gaze fusion for intent decoding).
 
 ## Architecture
 
@@ -60,11 +60,17 @@ intent-gateway/
 │   ├── co-gateway/             # Main server binary
 │   ├── co-audit/               # CLI benchmark tool
 │   └── co-replay-bench/        # Replay benchmark (real data through full pipeline)
+├── models/
+│   └── conv1d_fused.onnx       # Trained Conv1D fusion model (from research repo)
+├── data/
+│   └── synthetic_test.corec    # Generated synthetic test data (40 trials)
 ├── python/
 │   ├── export_onnx.py          # Export Conv1DFusion model to ONNX
 │   ├── validate_onnx.py        # Compare PyTorch vs ONNX Runtime outputs
 │   ├── convert_dataset.py      # Convert EEGEyeNet/EEGET-ALS/EEGET-RSOD to .corec
 │   ├── convert_openneuro.py    # Convert OpenNeuro BIDS .edf+physio to .corec
+│   ├── generate_synthetic_corec.py  # Generate synthetic .corec test files
+│   ├── grpc_client.py          # gRPC subscription client with latency measurement
 │   └── requirements.txt
 ├── rust/                       # Original Rust prototype (standalone crates)
 │   ├── crates/                 #   allocator, ring-buffer, transcoder, statistics,
@@ -105,7 +111,7 @@ cargo +nightly clippy --workspace
 
 ### Main Workspace (co-* crates)
 
-**74 passed, 0 failed** across 5 crates:
+**74 passed, 0 failed** across 6 crates:
 
 | Crate | Tests | Coverage |
 |-------|-------|----------|
@@ -132,16 +138,55 @@ cargo +nightly clippy --workspace
 ## Running the Server
 
 ```bash
-# Start the gateway
-cargo +nightly run --bin co-gateway -- --addr 0.0.0.0:50051 --channels 128 --sample-rate 256
+# Simulated data (default — no external files needed)
+cargo +nightly run --release --bin co-gateway -- --addr [::1]:50051 --channels 128 --sample-rate 256
 
-# With a trained ONNX model
-cargo +nightly run --bin co-gateway -- --model python/conv1d_fusion.onnx
+# Replay a .corec file with ONNX model inference
+cargo +nightly run --release --bin co-gateway -- \
+    --replay-file data/synthetic_test.corec \
+    --model models/conv1d_fused.onnx
 
 # Run the internal benchmark
 cargo +nightly run --bin co-audit -- --packets 100000 --channels 64
 cargo +nightly run --bin co-audit -- --packets 100000 --format json
 ```
+
+### End-to-End Demo: Replay with ONNX Inference
+
+The gateway supports full end-to-end replay: `.corec` file → EEG/gaze fusion → ONNX model inference → gRPC streaming with latency metrics.
+
+```bash
+# 1. Generate synthetic .corec test data
+python python/generate_synthetic_corec.py --output data/synthetic_test.corec --n-trials 40
+
+# 2. Train and export ONNX model (in research repo)
+cd ../spn-gaze-intent-research
+python scripts/train.py --synthetic --neural --fast-neural
+python scripts/export_to_onnx.py --verify
+cp models/saved/conv1d_fused.onnx ../intent-gateway/models/
+
+# 3. Run gateway with replay + ONNX
+cd ../intent-gateway
+cargo +nightly run --release --bin co-gateway -- \
+    --replay-file data/synthetic_test.corec \
+    --model models/conv1d_fused.onnx
+```
+
+**Measured results** (40 trials, 128ch @ 500 Hz, Conv1D ONNX model, release build):
+
+| Metric | Value |
+|--------|-------|
+| EEG frames replayed | 20,000 |
+| Fused packets produced | 19,992 |
+| ONNX inferences run | 195 |
+| Classifications | 180 intent / 15 observe |
+| Total elapsed | 109 ms |
+| **Throughput** | **183,486 frames/sec** |
+| **Real-time factor** | **367x** |
+| **Avg fusion latency** | **96 ns** |
+| **Avg ONNX inference** | **463 µs** |
+
+The model classifies intent/observe from the fused EEG+gaze windows. Fusion runs at sub-microsecond latency; ONNX inference completes in under 0.5ms — well within the ~2ms budget for a 500 Hz sample rate.
 
 ## Dataset Replay
 
@@ -154,7 +199,10 @@ python convert_dataset.py als --input /path/to/participant/ --output als_p01.cor
 python convert_dataset.py rsod --input /path/to/participant/ --output rsod_p01.corec
 python convert_openneuro.py --edf data/eeg.edf --physio data/physio.tsv --output sub001.corec
 
-# Replay benchmark
+# Generate synthetic test data
+python generate_synthetic_corec.py --output data/synthetic_test.corec --n-trials 40
+
+# Replay benchmark (offline, no gRPC)
 cargo +nightly run --release --bin co-replay-bench -- --input subject.corec
 ```
 
@@ -237,8 +285,8 @@ The `co-grpc` crate requires `protoc` (the Protocol Buffers compiler) at build t
 ### EEG Robustness Assumptions
 The pipeline currently processes raw EEG samples without preprocessing (no bandpass filter, no notch filter, no common average reference). Feature extraction operates on unfiltered data. For clinical-grade accuracy, preprocessing must be added either in-pipeline or upstream. The companion research repo's preprocessing (1-45 Hz bandpass, 50/60 Hz notch, CAR) has not yet been ported.
 
-### Calibration Requirements
-The ONNX inference model currently ships with random weights (proof-of-concept). A trained model from the research pipeline is required for meaningful intent classification. The `python/export_onnx.py` script exports the trained Conv1D fusion model, but training must be done in the research repo first.
+### Model Training
+The ONNX model (`models/conv1d_fused.onnx`) is trained on synthetic data in the companion research repo and exported via `scripts/export_to_onnx.py`. The gateway loads and runs it with 463µs average inference latency. For real-data accuracy, the model should be retrained on application-specific EEG+gaze recordings and re-exported.
 
 ### Streaming vs. Epoch Mismatch
 This gateway processes continuous frames. The research pipeline validates intent detection using epoch-based (event-locked) analysis, specifically the SPN signal which requires a -500ms to 0ms pre-stimulus window. Bridging this gap requires an epoch segmentation layer that is not yet implemented. See the companion research repo's roadmap for the integration plan.

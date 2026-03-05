@@ -14,6 +14,7 @@ co-core = { path = "../co-core" }
 co-fusion = { path = "../co-fusion" }
 co-inference = { path = "../co-inference" }
 co-ingest = { path = "../co-ingest" }
+co-replay = { path = "../co-replay" }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

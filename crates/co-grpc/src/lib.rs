@@ -17,8 +17,9 @@ use co_systems::{
 
 use co_core::pipeline::{PipelineConfig, self};
 use co_fusion::FusionEngine;
-use co_ingest::{SimulatedEegSource, SimulatedGazeSource};
-use co_inference::{StubClassifier, InferenceAccumulator};
+use co_ingest::{EegSource, GazeSource, SimulatedEegSource, SimulatedGazeSource};
+use co_inference::{StubClassifier, IntentClassifier, InferenceAccumulator};
+use co_replay::{ReplayEegSource, ReplayGazeSource};
 
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -215,5 +216,208 @@ pub fn spawn_ingest_pipeline(
             // Sleep for one EEG sample interval
             std::thread::sleep(std::time::Duration::from_nanos(eeg_interval_ns));
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Replay pipeline — replays .corec files with optional ONNX model inference
+// ---------------------------------------------------------------------------
+
+/// Spawns a replay pipeline that reads EEG+gaze data from a `.corec` file,
+/// fuses it, optionally runs ONNX model inference, and broadcasts
+/// FusedPackets with latency metrics.
+pub fn spawn_replay_pipeline(
+    tx: broadcast::Sender<FusedPacket>,
+    replay_file: String,
+    model_path: Option<String>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        // Open replay sources
+        let mut eeg_src = ReplayEegSource::open(&replay_file)
+            .unwrap_or_else(|e| panic!("failed to open replay file for EEG: {e}"));
+        let mut gaze_src = ReplayGazeSource::open(&replay_file)
+            .unwrap_or_else(|e| panic!("failed to open replay file for gaze: {e}"));
+
+        let header = eeg_src.header().clone();
+        let n_ch = header.eeg_channels as usize;
+
+        eprintln!("Replay source: {}", replay_file);
+        eprintln!("  EEG:  {}ch @ {} Hz, {} frames",
+                  header.eeg_channels, header.sample_rate_hz, header.num_eeg_frames);
+        eprintln!("  Gaze: @ {} Hz, {} frames",
+                  header.gaze_rate_hz, header.num_gaze_frames);
+
+        // Fusion engine
+        let mut fusion = FusionEngine::new(10.0, header.sample_rate_hz as usize);
+
+        // Load ONNX model or fall back to stub
+        let mut onnx_classifier: Option<IntentClassifier> = model_path
+            .as_ref()
+            .and_then(|p| {
+                match IntentClassifier::load(p) {
+                    Ok(c) => {
+                        eprintln!("  Model: {} (ONNX, {}ch × {} samples)",
+                                  p, c.n_eeg_channels(), c.n_samples());
+                        Some(c)
+                    }
+                    Err(e) => {
+                        eprintln!("  Model: failed to load {} — {e}, using stub", p);
+                        None
+                    }
+                }
+            });
+
+        if onnx_classifier.is_none() {
+            eprintln!("  Model: StubClassifier (no ONNX model loaded)");
+        }
+
+        let stub = StubClassifier;
+        let mut accumulator = InferenceAccumulator::new(n_ch, 3, 500, 100);
+        let mut sequence = 0u32;
+
+        // Latency tracking
+        let pipeline_start = std::time::Instant::now();
+        let mut total_eeg_frames = 0u64;
+        let mut total_fused = 0u64;
+        let mut inference_count = 0u64;
+        let mut total_inference_ns = 0u64;
+        let mut intent_count = 0u64;
+        let mut observe_count = 0u64;
+        let mut fusion_latency_ns_sum = 0u64;
+
+        // Interleave gaze pushes with EEG processing based on timestamp ratio
+        let gaze_per_eeg = header.gaze_rate_hz / header.sample_rate_hz;
+        let mut gaze_accumulator = 0.0f64;
+
+        // Process all frames as fast as possible (no sleep — benchmark mode)
+        loop {
+            // Push gaze frames proportional to sample rate ratio
+            gaze_accumulator += gaze_per_eeg;
+            while gaze_accumulator >= 1.0 {
+                if let Some(gaze) = gaze_src.next_gaze_frame() {
+                    fusion.push_gaze(gaze);
+                }
+                gaze_accumulator -= 1.0;
+            }
+
+            // Get next EEG frame
+            let eeg = match eeg_src.next_eeg_frame() {
+                Some(f) => f,
+                None => break, // End of file
+            };
+
+            total_eeg_frames += 1;
+
+            let fuse_start = std::time::Instant::now();
+            if let Some(fused) = fusion.fuse(eeg) {
+                let fuse_elapsed = fuse_start.elapsed().as_nanos() as u64;
+                fusion_latency_ns_sum += fuse_elapsed;
+                total_fused += 1;
+
+                // Accumulate for inference
+                accumulator.push(
+                    &fused.eeg.channels,
+                    fused.gaze.x,
+                    fused.gaze.y,
+                    fused.gaze.pupil_diameter,
+                );
+
+                let (confidence, classification) = if accumulator.is_ready() {
+                    if let Some(ref mut model) = onnx_classifier {
+                        match model.predict(
+                            accumulator.eeg_window(),
+                            accumulator.gaze_window(),
+                        ) {
+                            Ok(pred) => {
+                                inference_count += 1;
+                                total_inference_ns += pred.inference_ns;
+                                if pred.classification == "intent" {
+                                    intent_count += 1;
+                                } else {
+                                    observe_count += 1;
+                                }
+                                (pred.confidence, pred.classification)
+                            }
+                            Err(_) => {
+                                observe_count += 1;
+                                (0.5, "observe")
+                            }
+                        }
+                    } else {
+                        let pred = stub.predict(
+                            accumulator.eeg_window(),
+                            accumulator.gaze_window(),
+                        );
+                        observe_count += 1;
+                        (pred.confidence, pred.classification)
+                    }
+                } else {
+                    (0.0, "accumulating")
+                };
+
+                let packet = FusedPacket {
+                    timestamp_ns: fused.timestamp_ns,
+                    sequence_id: sequence,
+                    eeg_channels: fused.eeg.channels,
+                    gaze_x: fused.gaze.x,
+                    gaze_y: fused.gaze.y,
+                    pupil_diameter: fused.gaze.pupil_diameter,
+                    alignment_offset_ns: fused.alignment_offset_ns,
+                    features: vec![],
+                    confidence,
+                    classification: classification.to_string(),
+                };
+
+                let _ = tx.send(packet);
+                sequence = sequence.wrapping_add(1);
+            }
+        }
+
+        // Report
+        let elapsed = pipeline_start.elapsed();
+        let elapsed_ms = elapsed.as_millis() as u64;
+        let throughput = if elapsed_ms > 0 {
+            total_eeg_frames * 1000 / elapsed_ms
+        } else {
+            0
+        };
+        let realtime_factor = if elapsed_ms > 0 {
+            let data_duration_ms = (header.num_eeg_frames as f64
+                / header.sample_rate_hz * 1000.0) as u64;
+            data_duration_ms as f64 / elapsed_ms as f64
+        } else {
+            0.0
+        };
+        let avg_fusion_ns = if total_fused > 0 {
+            fusion_latency_ns_sum / total_fused
+        } else {
+            0
+        };
+        let avg_inference_us = if inference_count > 0 {
+            total_inference_ns / inference_count / 1000
+        } else {
+            0
+        };
+
+        eprintln!();
+        eprintln!("╔══════════════════════════════════════════════════════════╗");
+        eprintln!("║            REPLAY PIPELINE COMPLETE                      ║");
+        eprintln!("╠══════════════════════════════════════════════════════════╣");
+        eprintln!("║  EEG frames read:     {:>10}                        ║", total_eeg_frames);
+        eprintln!("║  Fused packets:       {:>10}                        ║", total_fused);
+        eprintln!("║  Inferences:          {:>10}                        ║", inference_count);
+        eprintln!("║    Intent:            {:>10}                        ║", intent_count);
+        eprintln!("║    Observe:           {:>10}                        ║", observe_count);
+        eprintln!("║  Elapsed:             {:>10} ms                     ║", elapsed_ms);
+        eprintln!("║  Throughput:          {:>10} frames/sec              ║", throughput);
+        eprintln!("║  Real-time factor:    {:>10.1}x                       ║", realtime_factor);
+        eprintln!("║  Avg fusion latency:  {:>10} ns                     ║", avg_fusion_ns);
+        eprintln!("║  Avg inference:       {:>10} µs                     ║", avg_inference_us);
+        if onnx_classifier.is_some() {
+            eprintln!("║  Model:               ONNX (real inference)              ║");
+        } else {
+            eprintln!("║  Model:               Stub (no ONNX loaded)              ║");
+        }
+        eprintln!("╚══════════════════════════════════════════════════════════╝");
     })
 }
