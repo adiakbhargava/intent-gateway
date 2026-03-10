@@ -1,5 +1,7 @@
 # Intent Gateway
 
+[![CI](https://github.com/adiakbhargava/intent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/adiakbhargava/intent-gateway/actions/workflows/ci.yml)
+
 **Real-time Rust gateway for multi-modal neural intent detection: EEG + gaze ingestion, timestamp fusion, ONNX inference, and gRPC streaming.**
 
 ```
