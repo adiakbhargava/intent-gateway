@@ -376,11 +376,7 @@ pub fn spawn_replay_pipeline(
         // Report
         let elapsed = pipeline_start.elapsed();
         let elapsed_ms = elapsed.as_millis() as u64;
-        let throughput = if elapsed_ms > 0 {
-            total_eeg_frames * 1000 / elapsed_ms
-        } else {
-            0
-        };
+        let throughput = (total_eeg_frames * 1000).checked_div(elapsed_ms).unwrap_or(0);
         let realtime_factor = if elapsed_ms > 0 {
             let data_duration_ms = (header.num_eeg_frames as f64
                 / header.sample_rate_hz * 1000.0) as u64;
@@ -388,16 +384,11 @@ pub fn spawn_replay_pipeline(
         } else {
             0.0
         };
-        let avg_fusion_ns = if total_fused > 0 {
-            fusion_latency_ns_sum / total_fused
-        } else {
-            0
-        };
-        let avg_inference_us = if inference_count > 0 {
-            total_inference_ns / inference_count / 1000
-        } else {
-            0
-        };
+        let avg_fusion_ns = fusion_latency_ns_sum.checked_div(total_fused).unwrap_or(0);
+        let avg_inference_us = total_inference_ns
+            .checked_div(inference_count)
+            .unwrap_or(0)
+            / 1000;
 
         eprintln!();
         eprintln!("╔══════════════════════════════════════════════════════════╗");
